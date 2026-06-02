@@ -1,6 +1,7 @@
 import { useEffect } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useSearchParams, useFetcher } from "react-router";
 import { toast } from "sonner";
+import { z } from "zod";
 import type { Route } from "./+types/courses.$slug";
 import {
   getCourseBySlug,
@@ -8,6 +9,12 @@ import {
   getLessonCountForCourse,
 } from "~/services/courseService";
 import { isUserEnrolled } from "~/services/enrollmentService";
+import {
+  getCourseRatingSummary,
+  getUserReview,
+  upsertReview,
+} from "~/services/reviewService";
+import { parseFormData, parseParams } from "~/lib/validation";
 import {
   calculateProgress,
   getLessonProgressForCourse,
@@ -37,6 +44,10 @@ import {
 } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { UserAvatar } from "~/components/user-avatar";
+import {
+  StarRatingDisplay,
+  StarRatingInput,
+} from "~/components/star-rating";
 import { data, isRouteErrorResponse } from "react-router";
 import { formatDuration, formatPrice } from "~/lib/utils";
 import { renderMarkdown } from "~/lib/markdown.server";
@@ -71,12 +82,14 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let progress = 0;
   let lessonProgressMap: Record<number, string> = {};
   let nextLessonId: number | null = null;
+  let userRating: number | null = null;
 
   if (currentUserId) {
     enrolled = isUserEnrolled(currentUserId, course.id);
 
     if (enrolled) {
       progress = calculateProgress(currentUserId, course.id, false, false);
+      userRating = getUserReview(currentUserId, course.id)?.rating ?? null;
 
       const progressRecords = getLessonProgressForCourse(
         currentUserId,
@@ -101,6 +114,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ? calculatePppPrice(courseWithDetails.price, country)
     : courseWithDetails.price;
   const tierInfo = getCountryTierInfo(country);
+  const rating = getCourseRatingSummary(course.id);
 
   return {
     course: courseWithDetails,
@@ -113,10 +127,50 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     currentUserId,
     pppPrice,
     tierInfo,
+    rating,
+    userRating,
   };
 }
 
-// No action — enrollment is handled via the purchase confirmation page
+const reviewParamsSchema = z.object({
+  slug: z.string().min(1),
+});
+
+const reviewActionSchema = z.object({
+  intent: z.literal("submit-rating"),
+  rating: z.coerce.number().int().min(1).max(5),
+});
+
+// Enrollment is handled via the purchase confirmation page. This action only
+// handles star-rating submissions (one per enrolled student, editable).
+export async function action({ params, request }: Route.ActionArgs) {
+  const { slug } = parseParams(params, reviewParamsSchema);
+  const course = getCourseBySlug(slug);
+
+  if (!course) {
+    throw data("Course not found", { status: 404 });
+  }
+
+  const currentUserId = await getCurrentUserId(request);
+  if (!currentUserId) {
+    throw data("You must be logged in.", { status: 401 });
+  }
+
+  // Only enrolled students may rate a course.
+  if (!isUserEnrolled(currentUserId, course.id)) {
+    throw data("You must be enrolled to rate this course.", { status: 403 });
+  }
+
+  const formData = await request.formData();
+  const parsed = parseFormData(formData, reviewActionSchema);
+
+  if (!parsed.success) {
+    return data({ error: "Invalid rating." }, { status: 400 });
+  }
+
+  upsertReview(currentUserId, course.id, parsed.data.rating);
+  return { success: true };
+}
 
 export function HydrateFallback() {
   return (
@@ -181,9 +235,13 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     currentUserId,
     pppPrice,
     tierInfo,
+    rating,
+    userRating,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
+  const ratingFetcher = useFetcher();
+  const isRatingSubmitting = ratingFetcher.state !== "idle";
 
   useEffect(() => {
     if (searchParams.get("already_enrolled") === "1") {
@@ -197,6 +255,16 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
       );
     }
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (ratingFetcher.state === "idle" && ratingFetcher.data) {
+      if (ratingFetcher.data.error) {
+        toast.error(ratingFetcher.data.error);
+      } else if (ratingFetcher.data.success) {
+        toast.success("Thanks for rating this course!");
+      }
+    }
+  }, [ratingFetcher.state, ratingFetcher.data]);
 
   const totalDuration = course.modules.reduce(
     (sum, mod) =>
@@ -320,6 +388,12 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
               {formatDuration(totalDuration, true, false, false)} total
             </span>
           )}
+          {rating.average !== null && (
+            <StarRatingDisplay
+              average={rating.average}
+              count={rating.count}
+            />
+          )}
         </div>
       </div>
 
@@ -413,6 +487,21 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
                       Buy More Seats
                     </Button>
                   </Link>
+                  <div className="mt-4 border-t pt-4">
+                    <p className="mb-2 text-sm font-medium">
+                      {userRating ? "Your rating" : "Rate this course"}
+                    </p>
+                    <StarRatingInput
+                      value={userRating ?? 0}
+                      disabled={isRatingSubmitting}
+                      onSelect={(r) =>
+                        ratingFetcher.submit(
+                          { intent: "submit-rating", rating: r },
+                          { method: "post" }
+                        )
+                      }
+                    />
+                  </div>
                 </>
               ) : (
                 enrollButton

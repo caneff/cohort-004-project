@@ -45,6 +45,7 @@ async function seed() {
 
   // Drop and recreate tables for a clean seed
   sqlite.exec(`
+    DROP TABLE IF EXISTS course_reviews;
     DROP TABLE IF EXISTS video_watch_events;
     DROP TABLE IF EXISTS quiz_answers;
     DROP TABLE IF EXISTS quiz_attempts;
@@ -1402,6 +1403,20 @@ You've completed the Building REST APIs course. You now have the skills to build
     .run();
 
   console.log("Created 7 enrollments.");
+
+  // ─── Course Reviews ───
+  // Only enrolled students rate a course. course1 gets a spread of ratings;
+  // course2 is left with none so the "no ratings yet" (hidden) path is visible.
+  db.insert(schema.courseReviews)
+    .values([
+      { userId: students[0].id, courseId: course1.id, rating: 5 },
+      { userId: students[1].id, courseId: course1.id, rating: 4 },
+      { userId: students[2].id, courseId: course1.id, rating: 5 },
+      { userId: students[4].id, courseId: course1.id, rating: 3 },
+    ])
+    .run();
+
+  console.log("Created 4 course reviews.");
 
   // ─── Lesson Progress ───
 

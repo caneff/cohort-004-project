@@ -1,6 +1,7 @@
 import { Form, Link, useSearchParams, useNavigation, isRouteErrorResponse } from "react-router";
 import type { Route } from "./+types/courses";
 import { buildCourseQuery, getLessonCountForCourse } from "~/services/courseService";
+import { getCourseRatingSummary } from "~/services/reviewService";
 import { getAllCategories } from "~/services/categoryService";
 import { CourseStatus } from "~/db/schema";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
@@ -9,6 +10,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { AlertTriangle, BookOpen, Search } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { UserAvatar } from "~/components/user-avatar";
+import { StarRatingDisplay } from "~/components/star-rating";
 import { getCurrentUserId } from "~/lib/session";
 import { formatPrice } from "~/lib/utils";
 import { getUserEnrolledCourses } from "~/services/enrollmentService";
@@ -63,6 +65,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     return {
       ...course,
       lessonCount: getLessonCountForCourse(course.id),
+      rating: getCourseRatingSummary(course.id),
       progress: userProgress?.progress ?? null,
       completedLessons: userProgress?.completedLessons ?? null,
       pppPrice,
@@ -209,6 +212,13 @@ export default function CourseCatalog({ loaderData }: Route.ComponentProps) {
                   <p className="line-clamp-2 text-sm text-muted-foreground">
                     {course.description}
                   </p>
+                  {course.rating.average !== null && (
+                    <StarRatingDisplay
+                      average={course.rating.average}
+                      count={course.rating.count}
+                      className="mt-3 text-xs"
+                    />
+                  )}
                 </CardContent>
                 {course.progress !== null && course.progress > 0 && (
                   <CardContent className="pt-0">
